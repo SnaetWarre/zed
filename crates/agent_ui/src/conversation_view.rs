@@ -6,6 +6,7 @@ fn should_use_linux_native_notifications() -> bool {
 #[cfg(target_os = "linux")]
 fn send_linux_freedesktop_notification(
     app_name: &str,
+    app_icon: &str,
     summary: &SharedString,
     body: &SharedString,
 ) -> anyhow::Result<()> {
@@ -40,7 +41,7 @@ fn send_linux_freedesktop_notification(
         &(
             app_name,
             0u32,
-            "",
+            app_icon,
             summary.as_ref(),
             body.as_ref(),
             actions,
@@ -2527,7 +2528,7 @@ impl ConversationView {
         title: &SharedString,
         caption: &SharedString,
     ) -> anyhow::Result<()> {
-        send_linux_freedesktop_notification("Zed", title, caption)
+        send_linux_freedesktop_notification("Zed", "zed", title, caption)
     }
 
     fn dismiss_notifications(&mut self, cx: &mut Context<Self>) {
