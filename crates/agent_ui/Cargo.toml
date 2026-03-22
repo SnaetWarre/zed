@@ -116,6 +116,9 @@ image.workspace = true
 async-fs.workspace = true
 reqwest_client = { workspace = true, optional = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "4"
+
 [dev-dependencies]
 acp_thread = { workspace = true, features = ["test-support"] }
 agent = { workspace = true, features = ["test-support"] }

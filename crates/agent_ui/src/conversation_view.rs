@@ -1,3 +1,69 @@
+#[cfg(target_os = "linux")]
+fn should_use_linux_native_notifications() -> bool {
+    true
+}
+
+#[cfg(target_os = "linux")]
+fn send_linux_freedesktop_notification(
+    app_name: &str,
+    summary: &SharedString,
+    body: &SharedString,
+) -> anyhow::Result<()> {
+    let connection = Connection::session().map_err(|error| {
+        anyhow::anyhow!("failed to connect to DBus session bus for notifications: {error}")
+    })?;
+
+    let proxy = Proxy::new(
+        &connection,
+        "org.freedesktop.Notifications",
+        "/org/freedesktop/Notifications",
+        "org.freedesktop.Notifications",
+    )
+    .map_err(|error| anyhow::anyhow!("failed to create DBus notifications proxy: {error}"))?;
+
+    // Notify(
+    //   s app_name,
+    //   u replaces_id,
+    //   s app_icon,
+    //   s summary,
+    //   s body,
+    //   as actions,
+    //   a{sv} hints,
+    //   i expire_timeout
+    // ) -> u id
+    let actions: Vec<&str> = Vec::new();
+    let mut hints: std::collections::HashMap<&str, OwnedValue> = std::collections::HashMap::new();
+    hints.insert("urgency", OwnedValue::from(1u8));
+
+    let notify_result: ZbusResult<u32> = proxy.call(
+        "Notify",
+        &(
+            app_name,
+            0u32,
+            "",
+            summary.as_ref(),
+            body.as_ref(),
+            actions,
+            hints,
+            -1i32,
+        ),
+    );
+
+    notify_result
+        .map(|_| ())
+        .map_err(|error| anyhow::anyhow!("freedesktop DBus Notify call failed: {error}"))
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_notification_tests {
+    use super::*;
+
+    #[test]
+    fn linux_native_notifications_enabled() {
+        assert!(should_use_linux_native_notifications());
+    }
+}
+
 use acp_thread::{
     AcpThread, AcpThreadEvent, AgentSessionInfo, AgentThreadEntry, AssistantMessage,
     AssistantMessageChunk, AuthRequired, LoadError, MentionUri, PermissionOptionChoice,
@@ -47,6 +113,12 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 use std::{collections::BTreeMap, rc::Rc, time::Duration};
+#[cfg(target_os = "linux")]
+use zbus::blocking::{Connection, Proxy};
+#[cfg(target_os = "linux")]
+use zbus::zvariant::OwnedValue;
+#[cfg(target_os = "linux")]
+use zbus::Result as ZbusResult;
 use terminal_view::terminal_panel::TerminalPanel;
 use text::Anchor;
 use theme::AgentFontSize;
@@ -2300,15 +2372,23 @@ impl ConversationView {
 
         // TODO: Change this once we have title summarization for external agents.
         let title = self.agent.agent_id().0;
+        let caption = caption.into();
 
         match settings.notify_when_agent_waiting {
             NotifyWhenAgentWaiting::PrimaryScreen => {
+                if self.try_send_native_notification_on_linux(&title, &caption) {
+                    return;
+                }
+
                 if let Some(primary) = cx.primary_display() {
-                    self.pop_up(icon, caption.into(), title, window, primary, cx);
+                    self.pop_up(icon, caption, title, window, primary, cx);
                 }
             }
             NotifyWhenAgentWaiting::AllScreens => {
-                let caption = caption.into();
+                if self.try_send_native_notification_on_linux(&title, &caption) {
+                    return;
+                }
+
                 for screen in cx.displays() {
                     self.pop_up(icon, caption.clone(), title.clone(), window, screen, cx);
                 }
@@ -2317,6 +2397,39 @@ impl ConversationView {
                 // Don't show anything
             }
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn try_send_native_notification_on_linux(
+        &self,
+        title: &SharedString,
+        caption: &SharedString,
+    ) -> bool {
+        if !should_use_linux_native_notifications() {
+            return false;
+        }
+
+        match self.send_linux_native_notification(title, caption) {
+            Ok(()) => {
+                log::debug!("agent waiting notification sent using freedesktop DBus");
+                true
+            }
+            Err(error) => {
+                log::warn!(
+                    "failed to send freedesktop DBus agent waiting notification, falling back to popup: {error}"
+                );
+                false
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn try_send_native_notification_on_linux(
+        &self,
+        _title: &SharedString,
+        _caption: &SharedString,
+    ) -> bool {
+        false
     }
 
     fn pop_up(
@@ -2406,6 +2519,15 @@ impl ConversationView {
                     })
                 });
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn send_linux_native_notification(
+        &self,
+        title: &SharedString,
+        caption: &SharedString,
+    ) -> anyhow::Result<()> {
+        send_linux_freedesktop_notification("Zed", title, caption)
     }
 
     fn dismiss_notifications(&mut self, cx: &mut Context<Self>) {
